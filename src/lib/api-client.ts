@@ -37,7 +37,7 @@ apiClient.interceptors.response.use(
 
 /**
  * Generic API request function with improved error handling
- */ \
+ */
 export const apiRequest = async <T>(config: AxiosRequestConfig)
 : Promise<T> =>
 {
