@@ -107,7 +107,7 @@ const Sidebar: React.FC = () => {
                 <div>
                   <button
                     className={`flex items-center w-full px-4 py-2 text-left hover:bg-gray-700 ${
-                      isActive(item.path) ? "bg-gray-700 text-gray-300" : "text-white"
+                      isActive(item.path) ? "text-gray-400" : "text-white"
                     }`}
                     onClick={() => toggleExpand(item.name)}
                   >
@@ -124,7 +124,7 @@ const Sidebar: React.FC = () => {
                           <Link
                             to={child.path}
                             className={`flex items-center px-4 py-2 rounded-md hover:bg-gray-700 ${
-                              isActive(child.path) ? "bg-gray-700 text-gray-300" : "text-white"
+                              isActive(child.path) ? "text-gray-400" : "text-white"
                             }`}
                           >
                             <span className="material-icons mr-2">{child.icon}</span>
@@ -139,7 +139,7 @@ const Sidebar: React.FC = () => {
                 <Link
                   to={item.path}
                   className={`flex items-center px-4 py-2 hover:bg-gray-700 ${
-                    isActive(item.path) ? "bg-gray-700 text-gray-300" : "text-white"
+                    isActive(item.path) ? "text-gray-400" : "text-white"
                   }`}
                 >
                   <span className="material-icons mr-2">{item.icon}</span>

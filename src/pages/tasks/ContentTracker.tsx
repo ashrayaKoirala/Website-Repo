@@ -2,14 +2,13 @@
 
 import type React from "react"
 import { useState, useEffect, useRef } from "react"
-import { motion } from "framer-motion"
-import { BarChartIcon as ChartBar, Film, Plus, Search, Tag, Trash, Edit, Calendar, ArrowRight } from "lucide-react"
+import { motion, AnimatePresence } from "framer-motion"
+import { BarChartIcon as ChartBar, Film, Plus, Search, Tag, Trash, Edit, Calendar, ArrowRight, GripVertical, Info, X } from "lucide-react"
+import * as Dialog from "@radix-ui/react-dialog"
 import { TasksApi } from "../../lib/api-client"
 import { useToast } from "../../components/Toast"
 import ErrorModal from "../../components/ErrorModal"
 import LoadingSpinner from "../../components/LoadingSpinner"
-import type { FC } from "react"
-import Layout from "../../components/Layout"
 
 // Define content item type
 interface ContentItem {
@@ -53,7 +52,7 @@ interface KanbanBoard {
   columns: KanbanColumn[]
 }
 
-const ContentTracker: FC = () => {
+const ContentTracker: React.FC = () => {
   const [columns, setColumns] = useState<Column[]>([
     { id: "idea", title: "Idea", items: [] },
     { id: "script", title: "Script", items: [] },
@@ -65,17 +64,16 @@ const ContentTracker: FC = () => {
 
   const [board, setBoard] = useState<KanbanBoard | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [showErrorModal, setShowErrorModal] = useState(false)
-  const [errorDetails, setErrorDetails] = useState("")
+  const [errorDetails, setErrorDetails] = useState({ title: "", message: "", details: "" })
   const [searchTerm, setSearchTerm] = useState("")
-  const [newItemTitle, setNewItemTitle] = useState("")
+  const [newItemTitle, setNewItemTitle] = useState("") // State for the new item input in Idea column
   const [editingItem, setEditingItem] = useState<ContentItem | null>(null)
+  const [isEditingModalOpen, setIsEditingModalOpen] = useState(false)
   const [draggedItem, setDraggedItem] = useState<ContentItem | null>(null)
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
-  const [newCardTitle, setNewCardTitle] = useState<string>("")
-  const [newCardColumn, setNewCardColumn] = useState<number | null>(null)
-  const [showNewCardForm, setShowNewCardForm] = useState<boolean>(false)
+  const [isAddingCardToColumn, setIsAddingCardToColumn] = useState<string | null>(null) // Track which column is adding card
+  const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false)
 
   const { showToast } = useToast()
   const dragNode = useRef<HTMLDivElement | null>(null)
@@ -111,8 +109,11 @@ const ContentTracker: FC = () => {
         setColumns(newColumns)
       } catch (err: any) {
         console.error("Error fetching content items:", err)
-        setError("Failed to load content items")
-        setErrorDetails(err.message || JSON.stringify(err))
+        setErrorDetails({
+          title: "Failed to Load Content",
+          message: "Could not fetch content items from the server.",
+          details: err.message || JSON.stringify(err),
+        })
         setShowErrorModal(true)
       } finally {
         setLoading(false)
@@ -162,6 +163,10 @@ const ContentTracker: FC = () => {
 
     setDraggedItem(null)
     setDragOverColumn(null)
+    // Ensure style is reset even if drop fails
+    if (dragNode.current) {
+      dragNode.current.style.opacity = "1"
+    }
   }
 
   // Handle drop
@@ -208,8 +213,11 @@ const ContentTracker: FC = () => {
         dragNode.current.style.opacity = "1"
         dragNode.current = null
       }
+      // Ensure state is reset after drop attempt
       setDraggedItem(null)
       setDragOverColumn(null)
+      // Note: Do NOT reset columns here, keep the optimistic update unless API fails explicitly
+      // If API call fails, we might need to revert the state, which adds complexity.
     }
   }
 
@@ -224,6 +232,11 @@ const ContentTracker: FC = () => {
         stage: "Idea",
         platform: "",
         target_release_date: new Date().toISOString().split("T")[0],
+        // Add other default fields if required by backend/UI
+        status: "in-progress",
+        progress: 0,
+        tags: [],
+        description: "",
       }
 
       const response = await TasksApi.createContentItem(newItem)
@@ -246,12 +259,17 @@ const ContentTracker: FC = () => {
 
         setColumns(newColumns)
         setNewItemTitle("")
+        setIsAddingCardToColumn(null) // Close input form
         showToast("New content item created", "success")
       }
     } catch (err: any) {
       console.error("Error creating content item:", err)
       showToast("Failed to create content item", "error")
-      setErrorDetails(err.message || JSON.stringify(err))
+      setErrorDetails({
+        title: "Creation Failed",
+        message: "Could not create the new content item.",
+        details: err.message || JSON.stringify(err),
+      })
       setShowErrorModal(true)
     }
   }
@@ -260,35 +278,40 @@ const ContentTracker: FC = () => {
   const handleUpdateItem = async () => {
     if (!editingItem) return
 
+    // Ensure editingItem has the necessary fields for the API call
+    const updateData = {
+      title: editingItem.title,
+      description: editingItem.description || "",
+      stage: editingItem.stage,
+      platform: editingItem.tags.join(", "), // Assuming tags map to platform for now
+      target_release_date: editingItem.dueDate || null,
+      // Add other fields as needed by the API
+    }
+
     try {
-      await TasksApi.updateContentStage(editingItem.id, editingItem.stage)
+      // Optimistic UI update (optional but improves UX)
+      const updatedColumns = columns.map((col) => ({
+        ...col,
+        items: col.items.map((item) => (item.id === editingItem.id ? editingItem : item)),
+      }))
+      setColumns(updatedColumns)
 
-      // Update item in columns
-      const newColumns = [...columns]
-      const columnIndex = newColumns.findIndex((col) => col.id === editingItem.stage.toLowerCase())
+      // Actual API call
+      await TasksApi.updateTask(editingItem.id, updateData)
 
-      if (columnIndex !== -1) {
-        // Remove item from all columns first
-        newColumns.forEach((col) => {
-          col.items = col.items.filter((item) => item.id !== editingItem.id)
-        })
-
-        // Add updated item to the correct column
-        newColumns[columnIndex].items.push({
-          ...editingItem,
-          progress: getProgressForStage(editingItem.stage),
-          status: editingItem.stage === "Analyze" ? "completed" : "in-progress",
-        })
-
-        setColumns(newColumns)
-        setEditingItem(null)
-        showToast("Content item updated", "success")
-      }
+      showToast("Content item updated", "success")
+      setIsEditingModalOpen(false) // Close modal on success
+      setEditingItem(null) // Clear editing state
     } catch (err: any) {
-      console.error("Error updating content item:", err)
-      showToast("Failed to update content item", "error")
-      setErrorDetails(err.message || JSON.stringify(err))
+      console.error("Error updating item:", err)
+      showToast("Failed to update item", "error")
+      setErrorDetails({
+        title: "Update Failed",
+        message: "Could not save changes to the content item.",
+        details: err.message || JSON.stringify(err),
+      })
       setShowErrorModal(true)
+      // Optionally revert optimistic update here if needed
     }
   }
 
@@ -308,19 +331,49 @@ const ContentTracker: FC = () => {
     } catch (err: any) {
       console.error("Error deleting content item:", err)
       showToast("Failed to delete content item", "error")
+      setErrorDetails({
+        title: "Deletion Failed",
+        message: "Could not delete the content item.",
+        details: err.message || JSON.stringify(err),
+      })
+      setShowErrorModal(true)
     }
   }
 
+  // Open Edit Modal
+  const openEditModal = (item: ContentItem) => {
+    setEditingItem({ ...item }) // Clone item to avoid modifying state directly before save
+    setIsEditingModalOpen(true)
+  }
+
+  // Handle changes in Edit Modal form
+  const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (!editingItem) return
+    const { name, value } = e.target
+    setEditingItem((prev) => (prev ? { ...prev, [name]: value } : null))
+  }
+
   // Filter items based on search term
-  const filteredColumns = columns.map((column) => ({
-    ...column,
-    items: column.items.filter(
-      (item) =>
-        item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.description && item.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        item.tags.some((tag) => tag.toLowerCase().includes(searchTerm.toLowerCase())),
-    ),
+  const filteredColumns = columns.map((col) => ({
+    ...col,
+    items: col.items.filter((item) => item.title.toLowerCase().includes(searchTerm.toLowerCase())),
   }))
+
+  // Animation variants
+  const container = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+      },
+    },
+  }
+
+  const itemVariant = {
+    hidden: { y: 20, opacity: 0 },
+    show: { y: 0, opacity: 1 },
+  }
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -335,354 +388,279 @@ const ContentTracker: FC = () => {
     }
   }
 
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-      },
-    },
-  }
-
-  const item = {
-    hidden: { y: 20, opacity: 0 },
-    show: { y: 0, opacity: 1 },
-  }
-
   if (loading) {
     return (
-      <Layout>
-        <div className="flex justify-center items-center h-full">
-          <LoadingSpinner />
-        </div>
-      </Layout>
+      <div className="flex justify-center items-center h-64">
+        <LoadingSpinner text="Loading Content Tracker..." />
+      </div>
     )
   }
 
   return (
-    <Layout>
-      <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
-        <motion.div variants={item} className="flex justify-between items-center">
+    <div className="p-4 md:p-6 space-y-6">
+      <motion.div variants={container} initial="hidden" animate="show">
+        <motion.div variants={itemVariant} className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
           <div>
             <h1 className="text-3xl font-bold font-mono mb-1">Content Tracker</h1>
-            <p className="text-gray-600">Track your content production workflow with this Kanban board.</p>
+            <p className="text-gray-600">Manage your content workflow visually.</p>
           </div>
-
-          <button
-            onClick={() =>
-              setEditingItem({
-                id: 0,
-                title: "",
-                description: "",
-                status: "in-progress",
-                stage: "Idea",
-                progress: 0,
-                tags: [],
-              })
-            }
-            className="py-2 px-4 bg-black text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center"
-          >
-            <Plus size={18} className="mr-2" />
-            New Content
-          </button>
-        </motion.div>
-
-        {/* Search */}
-        <motion.div variants={item} className="relative">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search size={18} className="text-gray-400" />
-          </div>
-          <input
-            type="text"
-            placeholder="Search content..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-black focus:outline-none"
-          />
-        </motion.div>
-
-        {/* Kanban Board */}
-        {loading ? (
-          <div className="flex justify-center items-center h-64">
-            <LoadingSpinner text="Loading content items..." />
-          </div>
-        ) : (
-          <motion.div
-            variants={item}
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 overflow-x-auto"
-          >
-            {filteredColumns.map((column) => (
-              <div
-                key={column.id}
-                className={`bg-white border rounded-xl shadow-sm overflow-hidden flex flex-col h-[calc(100vh-300px)] min-w-[280px] ${
-                  dragOverColumn === column.id ? "border-black" : "border-gray-200"
-                }`}
-                onDragOver={(e) => handleDragOver(e, column.id)}
-                onDrop={(e) => handleDrop(e, column.id)}
-              >
-                <div className="p-3 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
-                  <h3 className="font-semibold">{column.title}</h3>
-                  <span className="text-xs bg-gray-200 rounded-full px-2 py-0.5">{column.items.length}</span>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                  {column.items.map((contentItem) => (
-                    <div
-                      key={contentItem.id}
-                      className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm hover:shadow-md transition-all cursor-grab"
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, contentItem, column.id)}
-                      onDragEnd={handleDragEnd}
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <h4 className="font-medium">{contentItem.title}</h4>
-                        <div className="flex space-x-1">
-                          <button
-                            onClick={() => setEditingItem(contentItem)}
-                            className="p-1 rounded-lg hover:bg-gray-100 transition-colors"
-                          >
-                            <Edit size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteItem(contentItem.id, column.id)}
-                            className="p-1 rounded-lg hover:bg-gray-100 transition-colors"
-                          >
-                            <Trash size={14} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {contentItem.description && (
-                        <p className="text-sm text-gray-600 mb-2 line-clamp-2">{contentItem.description}</p>
-                      )}
-
-                      <div className="flex flex-wrap gap-1 mb-2">
-                        {contentItem.tags.map((tag, idx) => (
-                          <span key={idx} className="text-xs bg-gray-100 px-2 py-0.5 rounded flex items-center">
-                            <Tag size={10} className="mr-1" />
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-
-                      <div className="flex justify-between items-center">
-                        {contentItem.dueDate && (
-                          <span className="text-xs text-gray-500 flex items-center">
-                            <Calendar size={12} className="mr-1" />
-                            {contentItem.dueDate}
-                          </span>
-                        )}
-                        {getStatusBadge(contentItem.status)}
-                      </div>
-
-                      <div className="mt-2 w-full bg-gray-100 rounded-full h-1">
-                        <div className="bg-black h-1 rounded-full" style={{ width: `${contentItem.progress}%` }} />
-                      </div>
-                    </div>
-                  ))}
-
-                  {column.items.length === 0 && (
-                    <div className="flex flex-col items-center justify-center h-32 text-gray-400 text-sm">
-                      <Film size={24} className="mb-2" />
-                      <p>No items</p>
-                      <p>Drop content here</p>
-                    </div>
-                  )}
-                </div>
-
-                {column.id === "idea" && (
-                  <div className="p-2 border-t border-gray-200">
-                    <div className="flex">
-                      <input
-                        type="text"
-                        placeholder="Add new content..."
-                        value={newItemTitle}
-                        onChange={(e) => setNewItemTitle(e.target.value)}
-                        className="flex-1 border border-gray-200 rounded-l-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-black"
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleAddItem()
-                        }}
-                      />
-                      <button
-                        onClick={handleAddItem}
-                        className="bg-black text-white px-3 py-2 rounded-r-lg hover:bg-gray-800 transition-colors"
-                      >
-                        <Plus size={18} />
-                      </button>
-                    </div>
+          <div className="flex items-center gap-3">
+            <Dialog.Root open={isHowItWorksOpen} onOpenChange={setIsHowItWorksOpen}>
+              <Dialog.Trigger asChild>
+                <button className="py-2 px-3 bg-gray-100 border border-gray-200 rounded-lg hover:bg-gray-200 transition-colors flex items-center text-sm">
+                  <Info size={16} className="mr-2" />
+                  How It Works
+                </button>
+              </Dialog.Trigger>
+              {/* How It Works Dialog Portal */}
+              <Dialog.Portal>
+                <Dialog.Overlay className="fixed inset-0 bg-black/30 data-[state=open]:animate-overlayShow z-40" />
+                <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-md bg-white p-6 rounded-lg shadow-lg data-[state=open]:animate-contentShow focus:outline-none z-50">
+                  <Dialog.Title className="text-lg font-medium mb-2">How Content Tracker Works</Dialog.Title>
+                  <Dialog.Description className="text-sm text-gray-600 mb-4">
+                    This board helps visualize your content production pipeline.
+                    Drag and drop cards between columns (Idea, Script, Record, Edit, Upload, Analyze)
+                    to update their status. Add new content ideas in the 'Idea' column.
+                    Click on a card to edit its details or delete it.
+                  </Dialog.Description>
+                  <div className="flex justify-end">
+                    <Dialog.Close asChild>
+                      <button className="py-2 px-4 bg-black text-white rounded-lg hover:bg-gray-800 transition-colors text-sm">Close</button>
+                    </Dialog.Close>
                   </div>
-                )}
-              </div>
-            ))}
-          </motion.div>
-        )}
-
-        {/* Content Insights */}
-        <motion.div variants={item}>
-          <div className="flex items-center mb-4">
-            <ChartBar size={20} className="mr-2" />
-            <h2 className="text-xl font-semibold font-mono">Content Insights</h2>
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 relative overflow-hidden">
-            <div className="absolute inset-0 bg-black opacity-[0.02] pointer-events-none" />
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <h3 className="text-sm font-medium text-gray-500 mb-1">Content Pipeline</h3>
-                <p className="text-2xl font-semibold">
-                  {columns.reduce((total, column) => total + column.items.length, 0)} Projects
-                </p>
-                <div className="mt-2 text-sm">
-                  <span className="text-gray-500">
-                    {columns.find((col) => col.id === "edit")?.items.length || 0} In editing
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <h3 className="text-sm font-medium text-gray-500 mb-1">Production Stage</h3>
-                <div className="flex items-center space-x-1 mt-2">
-                  {columns.map((column, index) => (
-                    <div key={column.id} className="flex flex-col items-center">
-                      <div
-                        className={`h-16 w-4 rounded-sm ${column.items.length > 0 ? "bg-black" : "bg-gray-200"}`}
-                        style={{
-                          height: `${Math.min(column.items.length * 8 + 16, 64)}px`,
-                        }}
-                      />
-                      <span className="text-xs mt-1 text-gray-500">{column.title.charAt(0)}</span>
-                      {index < columns.length - 1 && <ArrowRight size={12} className="text-gray-300 mx-1" />}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <h3 className="text-sm font-medium text-gray-500 mb-1">Completed This Month</h3>
-                <p className="text-2xl font-semibold">
-                  {columns.find((col) => col.id === "analyze")?.items.length || 0} Projects
-                </p>
-                <div className="mt-2 text-sm">
-                  <span className="text-gray-500">
-                    {columns.find((col) => col.id === "upload")?.items.length || 0} Ready to publish
-                  </span>
-                </div>
-              </div>
+                  <Dialog.Close asChild>
+                    <button className="absolute top-3 right-3 p-1 rounded-full hover:bg-gray-100" aria-label="Close">
+                      <X size={18} />
+                    </button>
+                  </Dialog.Close>
+                </Dialog.Content>
+              </Dialog.Portal>
+            </Dialog.Root>
+            <div className="relative">
+              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search cards..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-black"
+              />
             </div>
           </div>
         </motion.div>
 
-        {/* Edit Content Item Modal */}
-        {editingItem && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-xl p-6 max-w-md w-full shadow-xl"
+        {/* Kanban Board Columns */}
+        <motion.div
+          variants={itemVariant}
+          className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 overflow-x-auto pb-4"
+          style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(280px, 1fr))` }} // Ensure columns don't shrink too much
+        >
+          {filteredColumns.map((column) => (
+            <div
+              key={column.id}
+              className={`bg-gray-50 rounded-xl p-4 h-full flex flex-col ${dragOverColumn === column.id ? "outline outline-2 outline-black outline-dashed" : ""}`}
+              onDragOver={(e) => handleDragOver(e, column.id)}
+              onDrop={(e) => handleDrop(e, column.id)}
+              onDragLeave={() => setDragOverColumn(null)} // Reset when leaving column area
             >
-              <h2 className="text-xl font-semibold mb-4">
-                {editingItem.id === 0 ? "Add New Content" : "Edit Content"}
-              </h2>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Title</label>
-                  <input
-                    type="text"
-                    value={editingItem.title}
-                    onChange={(e) => setEditingItem({ ...editingItem, title: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                    placeholder="Enter content title"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Description</label>
-                  <textarea
-                    value={editingItem.description || ""}
-                    onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                    placeholder="Enter description"
-                    rows={3}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Stage</label>
-                  <select
-                    value={editingItem.stage}
-                    onChange={(e) => setEditingItem({ ...editingItem, stage: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              {/* Column Header */}
+              <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-200">
+                <h2 className="font-semibold font-mono text-lg flex items-center">
+                  {column.title}
+                  <span className="ml-2 text-sm font-normal bg-gray-200 text-gray-600 rounded-full px-2 py-0.5">
+                    {column.items.length}
+                  </span>
+                </h2>
+                {/* Add button only for Idea column */}
+                {column.id === "idea" && (
+                  <button
+                    onClick={() => setIsAddingCardToColumn("idea")}
+                    className="p-1 text-gray-500 hover:text-black hover:bg-gray-200 rounded-full"
+                    aria-label="Add new idea"
                   >
-                    <option value="Idea">Idea</option>
-                    <option value="Script">Script</option>
-                    <option value="Record">Record</option>
-                    <option value="Edit">Edit</option>
-                    <option value="Upload">Upload</option>
-                    <option value="Analyze">Analyze</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Due Date</label>
-                  <input
-                    type="date"
-                    value={editingItem.dueDate || ""}
-                    onChange={(e) => setEditingItem({ ...editingItem, dueDate: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Tags (comma separated)</label>
-                  <input
-                    type="text"
-                    value={editingItem.tags.join(", ")}
-                    onChange={(e) =>
-                      setEditingItem({
-                        ...editingItem,
-                        tags: e.target.value
-                          .split(",")
-                          .map((tag) => tag.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                    placeholder="youtube, tutorial, review"
-                  />
-                </div>
+                    <Plus size={18} />
+                  </button>
+                )}
               </div>
 
-              <div className="flex justify-end space-x-3 mt-6">
-                <button
-                  onClick={() => setEditingItem(null)}
-                  className="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={editingItem.id === 0 ? handleAddItem : handleUpdateItem}
-                  className="px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
-                >
-                  {editingItem.id === 0 ? "Add Content" : "Update Content"}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+              {/* Column Body - Cards */}
+              <div className="space-y-3 flex-1 overflow-y-auto pr-1 -mr-1" style={{ maxHeight: "calc(100vh - 250px)" }}>
+                {column.items.map((card) => (
+                  <motion.div
+                    key={card.id}
+                    layout // Animate layout changes
+                    variants={itemVariant}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, card, column.id)}
+                    onDragEnd={handleDragEnd}
+                    className={`bg-white p-4 rounded-lg border border-gray-200 shadow-sm cursor-grab active:cursor-grabbing ${draggedItem?.id === card.id ? "opacity-40 border-black" : "hover:shadow-md"}`}
+                    title="Drag to move to another stage"
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-medium flex-1 mr-2 break-words">{card.title}</h3>
+                      {/* Basic Edit/Delete - consider dropdown later */}
+                      <div className="flex items-center space-x-1 flex-shrink-0">
+                        <button
+                          onClick={() => openEditModal(card)}
+                          className="p-1 text-gray-400 hover:text-black hover:bg-gray-100 rounded"
+                          aria-label="Edit item"
+                        >
+                          <Edit size={14} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteItem(card.id, column.id)} // Consider adding confirmation
+                          className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                          aria-label="Delete item"
+                        >
+                          <Trash size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    {card.description && <p className="text-sm text-gray-600 mb-2 break-words">{card.description}</p>}
+                    <div className="flex items-center justify-between text-xs text-gray-500">
+                      {card.dueDate && (
+                        <span className="flex items-center">
+                          <Calendar size={12} className="mr-1" />
+                          {new Date(card.dueDate).toLocaleDateString()}
+                        </span>
+                      )}
+                      {card.tags && card.tags.length > 0 && (
+                        <span className="flex items-center bg-gray-100 px-1.5 py-0.5 rounded">
+                          <Tag size={12} className="mr-1" />
+                          {card.tags.join(", ")}
+                        </span>
+                      )}
+                    </div>
+                    {/* Progress Bar - can be customized */}
+                    <div className="mt-3">
+                      <div className="w-full bg-gray-200 rounded-full h-1">
+                        <div
+                          className="bg-black h-1 rounded-full"
+                          style={{ width: `${card.progress}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
 
-        {/* Error Modal */}
+                {/* Add New Card Form */}
+                {column.id === "idea" && isAddingCardToColumn === "idea" && (
+                  <motion.div layout variants={itemVariant} className="bg-white p-3 rounded-lg border border-gray-300 mt-3">
+                    <textarea
+                      value={newItemTitle}
+                      onChange={(e) => setNewItemTitle(e.target.value)}
+                      placeholder="Enter new idea title..."
+                      rows={2}
+                      className="w-full text-sm p-2 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-black mb-2"
+                    />
+                    <div className="flex justify-end space-x-2">
+                      <button
+                        onClick={() => setIsAddingCardToColumn(null)}
+                        className="py-1 px-3 text-xs border border-gray-300 rounded-md hover:bg-gray-100"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleAddItem}
+                        className="py-1 px-3 text-xs bg-black text-white rounded-md hover:bg-gray-800"
+                      >
+                        Add Idea
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Empty column placeholder */}
+                {column.items.length === 0 && isAddingCardToColumn !== column.id && (
+                  <div className="text-center text-sm text-gray-400 py-4">
+                    Drag cards here or add new ideas.
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </motion.div>
+
+        {/* Editing Modal */}
+        <AnimatePresence>
+          {isEditingModalOpen && editingItem && (
+            <Dialog.Portal forceMount>
+              <Dialog.Overlay className="fixed inset-0 bg-black/30 data-[state=open]:animate-overlayShow z-40" />
+              <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-lg bg-white p-6 rounded-lg shadow-lg data-[state=open]:animate-contentShow focus:outline-none z-50">
+                <Dialog.Title className="text-lg font-medium mb-4">Edit Content Item</Dialog.Title>
+                <div className="space-y-4">
+                  <div>
+                    <label htmlFor="edit-title" className="block text-sm font-medium mb-1">Title</label>
+                    <input
+                      id="edit-title"
+                      name="title" // Important for handleEditFormChange
+                      value={editingItem.title}
+                      onChange={handleEditFormChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-black"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="edit-description" className="block text-sm font-medium mb-1">Description</label>
+                    <textarea
+                      id="edit-description"
+                      name="description" // Important for handleEditFormChange
+                      value={editingItem.description || ""}
+                      onChange={handleEditFormChange}
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-black"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="edit-dueDate" className="block text-sm font-medium mb-1">Due Date</label>
+                    <input
+                      id="edit-dueDate"
+                      name="dueDate" // Important for handleEditFormChange
+                      type="date"
+                      value={editingItem.dueDate ? editingItem.dueDate.split('T')[0] : ''} // Format for date input
+                      onChange={handleEditFormChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-black"
+                    />
+                  </div>
+                  {/* Add inputs for tags, etc. if needed */}
+                </div>
+                <div className="mt-6 flex justify-end space-x-3">
+                  <Dialog.Close asChild>
+                    <button
+                      onClick={() => { setEditingItem(null); setIsEditingModalOpen(false); }}
+                      className="py-2 px-4 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                    >
+                      Cancel
+                    </button>
+                  </Dialog.Close>
+                  <button
+                    onClick={handleUpdateItem}
+                    className="py-2 px-4 bg-black text-white rounded-lg hover:bg-gray-800 transition-colors text-sm"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+                <Dialog.Close asChild>
+                  <button
+                    onClick={() => { setEditingItem(null); setIsEditingModalOpen(false); }}
+                    className="absolute top-3 right-3 p-1 rounded-full hover:bg-gray-100" aria-label="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </Dialog.Close>
+              </Dialog.Content>
+            </Dialog.Portal>
+          )}
+        </AnimatePresence>
+
         <ErrorModal
           isOpen={showErrorModal}
-          onClose={() => setShowErrorModal(false)}
-          title="Error Loading Content"
-          message={error || "An error occurred while loading content items."}
-          details={errorDetails}
+          onClose={() => { setShowErrorModal(false); setErrorDetails({ title: "", message: "", details: "" }); }}
+          title={errorDetails.title || "Error"}
+          message={errorDetails.message}
+          details={errorDetails.details}
         />
       </motion.div>
-    </Layout>
+    </div>
   )
 }
 
