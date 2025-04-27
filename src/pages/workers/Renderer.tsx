@@ -1,0 +1,61 @@
+"use client"
+
+import { motion } from "framer-motion"
+import { Download, Film, Settings, Upload } from "lucide-react"
+
+const Renderer = () => {
+  const container = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+      },
+    },
+  }
+
+  const item = {
+    hidden: { y: 20, opacity: 0 },
+    show: { y: 0, opacity: 1 },
+  }
+
+  return (
+    <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
+      <motion.div variants={item}>
+        <h1 className="text-3xl font-bold font-mono mb-1">Final Renderer</h1>
+        <p className="text-gray-600 mb-6">Arrange clips and render your final video with high quality.</p>
+      </motion.div>
+
+      <motion.div
+        variants={item}
+        className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden p-8 text-center"
+      >
+        <div className="max-w-md mx-auto">
+          <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
+            <Film size={28} />
+          </div>
+
+          <h2 className="text-xl font-semibold font-mono mb-2">Final Video Rendering</h2>
+          <p className="text-gray-600 mb-6">Compile all your edited clips into a polished final video</p>
+
+          <div className="flex space-x-4 justify-center">
+            <button className="py-2 px-4 bg-black text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center">
+              <Upload size={18} className="mr-2" />
+              Add Clips
+            </button>
+            <button className="py-2 px-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center">
+              <Settings size={18} className="mr-2" />
+              Settings
+            </button>
+            <button className="py-2 px-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center">
+              <Download size={18} className="mr-2" />
+              Export
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+export default Renderer
