@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Add any other global styles or layer definitions below */
+@layer base {
+  :root {
+    /* Example definitions if needed, Tailwind typically handles these */
+    /* --border: hsl(var(--border)); */
+    /* --input: hsl(var(--input)); */
+    /* ... etc ... */
+  }
+
+  * {
+    @apply border-border; /* Apply base border color variable if needed globally */
+  }
+
+  body {
+     /* Add global body styles if needed */
+  }
+} 
